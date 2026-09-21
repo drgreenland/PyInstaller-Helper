@@ -150,19 +150,46 @@ Your app icon. Set to `None` to use the default Python icon.
 ```python
 ICON_MAC = "icon.icns"    # macOS — .icns format, put file in project folder
 ICON_WIN = "icon.ico"     # Windows — .ico format, put file in project folder
-ICON_MAC = None           # no custom icon
+ICON_MAC = None           # no custom icon — Python's default icon will be used
 ```
 
-**How to create a .icns from any image on macOS:**
+#### Icon Format Quick Reference
+
+Each platform requires a **different file format**. You cannot use the same file for all platforms. You need to convert your image into the right format for each OS.
+
+| Platform | Required Format | Extension | Minimum Source Size | Where to Put It |
+|----------|----------------|-----------|--------------------|--------------:|
+| macOS    | Apple Icon Image | `.icns` | 512×512 px PNG | Project folder (same level as `build.py`) |
+| Windows  | Windows Icon | `.ico` | 256×256 px PNG | Project folder (same level as `build.py`) |
+| Linux    | PNG image | `.png` | 256×256 px | Not used by `build.py` directly — set automatically |
+
+> **Key rule:** You cannot hand PyInstaller a `.png` or `.jpg` and expect it to become an icon. You must convert it first.
+
+#### Creating a .icns for macOS
+
+Open Terminal and run this one command (your source PNG should be at least 512×512 pixels):
 
 ```bash
-# Your source image should be at least 512×512 pixels
 sips -s format icns your-image.png --out icon.icns
 ```
 
-**How to create a .ico for Windows:**
-- Free online: https://www.favicon.io/favicon-converter/
-- Or use GIMP: File → Export As → save as `icon.ico`
+That creates `icon.icns` in the same folder. Then set `ICON_MAC = "icon.icns"` in the CONFIG.
+
+#### Creating a .ico for Windows
+
+- **Easiest (free online):** Go to https://www.favicon.io/favicon-converter/ — upload your PNG, download the `.ico` file
+- **GIMP:** File → Export As → name the file `icon.ico` → click Export → Save
+- **On Mac with ImageMagick installed:** `magick convert your-image.png -resize 256x256 icon.ico`
+
+Then set `ICON_WIN = "icon.ico"` in the CONFIG.
+
+#### Common icon mistakes
+
+- Setting `ICON_MAC = "icon.png"` — **won't work.** Must be `.icns`
+- Setting `ICON_WIN = "icon.icns"` — **won't work on Windows.** Must be `.ico`
+- Putting the icon file in a subfolder — `build.py` looks in the same folder as itself
+- Using a tiny source image (under 256×256) — the icon will look blurry; use 512×512 or larger
+- Icon shows correctly in `dist/` but not after installing — macOS caches icons; see HELP.md for the fix
 
 ---
 

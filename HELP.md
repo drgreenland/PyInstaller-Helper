@@ -9,20 +9,21 @@ This is the deep-dive companion to the README. It covers how PyInstaller actuall
 1. [How PyInstaller Works](#how-pyinstaller-works)
 2. [Understanding the Build Output](#understanding-the-build-output)
 3. [The Most Common Errors — and How to Fix Them](#the-most-common-errors)
-4. [EXTRA_DATA — The Complete Guide](#extra_data--the-complete-guide)
-5. [HIDDEN_IMPORTS — The Complete Guide](#hidden_imports--the-complete-guide)
-6. [EXCLUDES — When and Why](#excludes--when-and-why)
-7. [Icons — Everything You Need to Know](#icons--everything-you-need-to-know)
-8. [macOS-Specific Notes](#macos-specific-notes)
-9. [Windows-Specific Notes](#windows-specific-notes)
-10. [Linux-Specific Notes](#linux-specific-notes)
-11. [Common Python Packages — Known Issues](#common-python-packages--known-issues)
-12. [Virtual Environments (venv / uv / conda)](#virtual-environments)
-13. [Making the Built App Read/Write Files Correctly](#making-the-built-app-readwrite-files-correctly)
-14. [Reducing Output Size](#reducing-output-size)
-15. [Rebuilding After Code Changes](#rebuilding-after-code-changes)
-16. [Advanced: Adding a Second .spec Entry](#advanced-adding-extra-binaries)
-17. [FAQ](#faq)
+4. [Paths — The #1 Source of Confusion](#paths--the-1-source-of-confusion)
+5. [EXTRA_DATA — The Complete Guide](#extra_data--the-complete-guide)
+6. [HIDDEN_IMPORTS — The Complete Guide](#hidden_imports--the-complete-guide)
+7. [EXCLUDES — When and Why](#excludes--when-and-why)
+8. [Icons — Everything You Need to Know](#icons--everything-you-need-to-know)
+9. [macOS-Specific Notes](#macos-specific-notes)
+10. [Windows-Specific Notes](#windows-specific-notes)
+11. [Linux-Specific Notes](#linux-specific-notes)
+12. [Common Python Packages — Known Issues](#common-python-packages--known-issues)
+13. [Virtual Environments (venv / uv / conda)](#virtual-environments)
+14. [Making the Built App Read/Write Files Correctly](#making-the-built-app-readwrite-files-correctly)
+15. [Reducing Output Size](#reducing-output-size)
+16. [Rebuilding After Code Changes](#rebuilding-after-code-changes)
+17. [Advanced: Adding Extra Binaries](#advanced-adding-extra-binaries)
+18. [FAQ](#faq)
 
 ---
 
@@ -225,6 +226,155 @@ xattr -cr /Applications/YourApp.app
 
 ---
 
+### ❌ Windows: Antivirus quarantines or deletes your .exe
+
+This is one of the most common and most frustrating PyInstaller problems on Windows, and almost nobody warns you about it.
+
+**Cause:** PyInstaller uses a "bootloader" — a small compiled program that unpacks and launches your Python code. Antivirus software (Windows Defender, Norton, McAfee, Avast, etc.) sees this bootloader pattern and flags the `.exe` as suspicious or even malicious. This is a **false positive** — your app is safe — but AV software doesn't know that.
+
+**Symptoms:**
+- The `.exe` disappears from `dist/` immediately after the build finishes
+- Windows Defender shows a notification: "Threat found: Trojan:Win32/..."
+- The app runs on your machine but gets deleted when copied to another Windows PC
+- Double-clicking the `.exe` does nothing — no error, no window
+
+**Fix 1 — Add your project folder as an exclusion (recommended):**
+1. Windows Security → Virus & threat protection → Manage settings
+2. Scroll to "Exclusions" → Add or remove exclusions
+3. Add Folder → select your project folder (e.g. `C:\Users\You\MyProject\`)
+4. Rebuild — Defender won't touch the output
+
+**Fix 2 — Temporarily disable real-time protection while building:**
+1. Windows Security → Virus & threat protection → Manage settings
+2. Turn off "Real-time protection"
+3. Run `build.py`
+4. Turn real-time protection back on immediately after
+
+**Fix 3 — Rebuild PyInstaller's bootloader (most thorough, one-time effort):**
+
+The reason AV software triggers is that thousands of developers share the same pre-compiled PyInstaller bootloader — including malware authors. Building your own bootloader gives your `.exe` a unique signature AV software won't recognise. See https://pyinstaller.org/en/stable/bootloader-building.html
+
+---
+
+### ❌ Windows: "Failed to execute script main" — app closes immediately
+
+This is the most cryptic and common Windows error. You double-click the `.exe`, a black window flashes for a split second and disappears.
+
+**Cause:** Your app is crashing on startup, but because `WINDOWED = True`, the console closes before you can read the error.
+
+**How to see the actual error:**
+
+Step 1: Temporarily change your CONFIG:
+```python
+WINDOWED = False    # ← change this temporarily
+```
+
+Step 2: Rebuild and run the `.exe`. The console stays open so you can read the error.
+
+Step 3: Fix the error (usually a missing file in `EXTRA_DATA` or a missing module in `HIDDEN_IMPORTS`).
+
+Step 4: Change `WINDOWED` back to `True` and rebuild.
+
+**Alternative — capture output to a file:**
+```cmd
+cd dist\AppName
+AppName.exe > output.txt 2>&1
+type output.txt
+```
+
+**Common causes:**
+
+| Error in output | Fix |
+|-----------------|-----|
+| `FileNotFoundError: config.json` | Add `("config.json", ".")` to `EXTRA_DATA` |
+| `ModuleNotFoundError: No module named 'X'` | Add `"X"` to `HIDDEN_IMPORTS` |
+| `FileNotFoundError: images/logo.png` | Add `("images/", "images")` to `EXTRA_DATA` |
+| `sqlite3.OperationalError: unable to open database` | Add your `.sqlite` file to `EXTRA_DATA` |
+| `PermissionError` on a file | App is trying to write into the bundle — see file paths section |
+
+---
+
+### ❌ App crashes silently — no error message anywhere
+
+Your built app opens briefly then disappears. No error dialog. No message. Nothing.
+
+**This almost always means `WINDOWED = True` is swallowing the crash output.**
+
+**On macOS — run from Terminal to see the error:**
+```bash
+"/Applications/YourApp.app/Contents/MacOS/YourApp"
+```
+Or open Console app (Applications → Utilities → Console) and filter by your app name.
+
+**On Windows — run from Command Prompt:**
+```cmd
+cd dist\AppName
+AppName.exe
+```
+The window stays open long enough to read the error.
+
+**Quickest fix on any platform:** temporarily set `WINDOWED = False`, rebuild, run, read the error, fix it, set `WINDOWED = True`, rebuild again.
+
+---
+
+### ❌ Windows: `RuntimeError: An attempt has been made to start a new process before the current process has finished bootstrapping`
+
+**Cause:** Your app uses Python's `multiprocessing` module. On Windows, multiprocessing re-imports your script from scratch to create new processes — this causes an infinite loop in a built `.exe`.
+
+**Fix:** Add these two lines at the **very top** of your entry script, before anything else:
+
+```python
+import multiprocessing
+multiprocessing.freeze_support()
+
+# ... rest of your imports and code below here
+```
+
+This must be the first code that runs. If anything is above it, move it below.
+
+---
+
+### ❌ SSL errors — `CERTIFICATE_VERIFY_FAILED` when making web requests
+
+**Cause:** Your app makes HTTPS requests but can't find the SSL certificate bundle in the built environment.
+
+**Fix — add to your entry script near the top:**
+
+```python
+import os
+import certifi
+os.environ['SSL_CERT_FILE'] = certifi.where()
+os.environ['REQUESTS_CA_BUNDLE'] = certifi.where()
+```
+
+**Also add to CONFIG:**
+```python
+HIDDEN_IMPORTS = ["certifi"]
+```
+
+Make sure `certifi` is installed: `pip install certifi`
+
+---
+
+### ❌ Icon not updating after rebuild
+
+Old icon still showing after you rebuilt with a new one. This is OS caching, not a PyInstaller problem.
+
+**macOS:**
+```bash
+sudo find /private/var/folders -name com.apple.dock.iconcache -delete 2>/dev/null
+killall Dock
+killall Finder
+```
+Or log out and back in — that always clears it.
+
+**Windows:** Open Task Manager → find Windows Explorer → right-click → Restart. Or run:
+```cmd
+ie4uinit.exe -show
+```
+
+---
+
 ### ❌ Build seems stuck / nothing happening for 5+ minutes
 
 PyInstaller is not stuck. Building takes time — especially the first time, and especially on large apps with many dependencies. It can take:
@@ -237,6 +387,103 @@ PyInstaller is not stuck. Building takes time — especially the first time, and
 Leave it running. The terminal will eventually show "BUILD COMPLETE".
 
 If it has been genuinely stuck for over 15 minutes with zero output, press Ctrl+C and try again.
+
+---
+
+## Paths — The #1 Source of Confusion
+
+This is the thing that trips up almost everyone who tries to use PyInstaller directly. Different parts of the toolchain make different assumptions about where you are, and they contradict each other.
+
+**`build.py` solves this for you.** Here's how, and why it matters.
+
+### Rule 1: EXTRA_DATA paths are always relative to your project folder
+
+When you write this in the CONFIG:
+
+```python
+EXTRA_DATA = [
+    ("images/", "images"),
+    ("config.json", "."),
+]
+```
+
+`"images/"` means: **the `images/` folder that is sitting right next to `build.py`**. Not the full path. Not `/Users/m4/Development/MyApp/images/`. Just `images/`.
+
+This is correct. `build.py` handles making it absolute before passing it to PyInstaller.
+
+**You should never need to write a full path anywhere in the CONFIG.** If you find yourself writing `/Users/...` or `C:\Users\...` in the CONFIG, stop — something is wrong.
+
+### Rule 2: Run `python3 build.py` from INSIDE your project folder
+
+The most common path error happens here. You must `cd` into your project folder first:
+
+```bash
+# CORRECT:
+cd /Users/m4/Development/MyApp
+python3 build.py
+
+# WRONG — will fail with "Entry point not found":
+python3 /Users/m4/Development/MyApp/build.py
+```
+
+When you run `python3 build.py` from inside the folder, Python's working directory is the project folder. All relative paths in the CONFIG resolve correctly.
+
+### Rule 3: Inside your Python code, never use plain relative paths for data files
+
+This is the sneaky one that bites you after the build works fine. Your script works perfectly in development:
+
+```python
+with open("config.json") as f:       # works in dev
+    data = json.load(f)
+
+image = Image.open("images/logo.png")  # works in dev
+```
+
+But in the built app, the working directory is NOT your project folder — it could be anywhere. These paths break.
+
+**The fix** — use this helper function in your Python code:
+
+```python
+import sys, os
+
+def resource(relative_path):
+    """Finds bundled files whether running from source or as a built app."""
+    if hasattr(sys, '_MEIPASS'):
+        return os.path.join(sys._MEIPASS, relative_path)
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), relative_path)
+```
+
+Then use it everywhere you load a file:
+
+```python
+with open(resource("config.json")) as f:      # works everywhere
+    data = json.load(f)
+
+image = Image.open(resource("images/logo.png"))  # works everywhere
+```
+
+Copy this `resource()` function into your `main.py` once. Use it for every file your app reads. That's it — you never have to think about paths again.
+
+### Rule 4: Files your app WRITES go in the user's home folder, not the bundle
+
+The app bundle is read-only. If you write files back into the bundle location (saves, logs, databases), it will fail with a `PermissionError`.
+
+Write user data here instead:
+
+```python
+import os
+
+def user_data(filename):
+    folder = os.path.join(os.path.expanduser("~"), ".myappname")
+    os.makedirs(folder, exist_ok=True)
+    return os.path.join(folder, filename)
+
+# Usage:
+settings = user_data("settings.json")   # ~/. myappname/settings.json
+database = user_data("data.sqlite")     # ~/.myappname/data.sqlite
+```
+
+This creates a hidden folder in the user's home directory. It's writable, it persists between app runs, and it works the same way on Mac, Windows, and Linux.
 
 ---
 
@@ -379,50 +626,173 @@ If your app crashes after adding something to EXCLUDES, remove it. Some packages
 
 ## Icons — Everything You Need to Know
 
-### macOS (.icns)
+### The most important thing to understand about icons
 
-**Creating .icns from any image:**
+**Each platform requires a completely different file format.** You cannot use the same file for macOS, Windows, and Linux. You must convert your image into the right format for each platform before building.
 
-The simplest method uses `sips`, which is built into every Mac:
+| Platform | Required format | File extension | Notes |
+|----------|----------------|----------------|-------|
+| macOS    | Apple Icon Image | `.icns` | Contains all sizes from 16×16 to 1024×1024 |
+| Windows  | Windows Icon | `.ico` | Contains multiple sizes in one file |
+| Linux    | PNG | `.png` | Used in the `.desktop` entry; `build.py` sets this automatically |
+
+**Starting point for all platforms:** use a PNG image that is at least **512×512 pixels**, ideally **1024×1024 pixels**. Anything smaller will look blurry at high DPI.
+
+---
+
+### macOS icons (.icns)
+
+#### Method 1 — Quick (good enough for personal use)
+
+Open Terminal and run this one command:
 
 ```bash
-# Source image should be 512×512 or larger PNG
 sips -s format icns your-image.png --out icon.icns
 ```
 
-For better quality with all icon sizes:
+`sips` is built into every Mac. No install needed. This creates `icon.icns` in the current folder.
+
+#### Method 2 — Quality (all sizes, looks sharp everywhere)
+
+macOS uses your icon at many different sizes — 16×16 in the menu bar, 128×128 in Finder, 512×512 in the Dock on a Retina screen. The quality method generates all of them:
 
 ```bash
-# Create an iconset folder with all required sizes
+# Step 1: Create the iconset folder
 mkdir icon.iconset
-sips -z 16 16     your-image.png --out icon.iconset/icon_16x16.png
-sips -z 32 32     your-image.png --out icon.iconset/icon_16x16@2x.png
-sips -z 32 32     your-image.png --out icon.iconset/icon_32x32.png
-sips -z 64 64     your-image.png --out icon.iconset/icon_32x32@2x.png
-sips -z 128 128   your-image.png --out icon.iconset/icon_128x128.png
-sips -z 256 256   your-image.png --out icon.iconset/icon_128x128@2x.png
-sips -z 256 256   your-image.png --out icon.iconset/icon_256x256.png
-sips -z 512 512   your-image.png --out icon.iconset/icon_256x256@2x.png
-sips -z 512 512   your-image.png --out icon.iconset/icon_512x512.png
+
+# Step 2: Generate all required sizes from your source PNG
+sips -z 16   16   your-image.png --out icon.iconset/icon_16x16.png
+sips -z 32   32   your-image.png --out icon.iconset/icon_16x16@2x.png
+sips -z 32   32   your-image.png --out icon.iconset/icon_32x32.png
+sips -z 64   64   your-image.png --out icon.iconset/icon_32x32@2x.png
+sips -z 128  128  your-image.png --out icon.iconset/icon_128x128.png
+sips -z 256  256  your-image.png --out icon.iconset/icon_128x128@2x.png
+sips -z 256  256  your-image.png --out icon.iconset/icon_256x256.png
+sips -z 512  512  your-image.png --out icon.iconset/icon_256x256@2x.png
+sips -z 512  512  your-image.png --out icon.iconset/icon_512x512.png
 sips -z 1024 1024 your-image.png --out icon.iconset/icon_512x512@2x.png
+
+# Step 3: Convert the iconset folder into a single .icns file
 iconutil -c icns icon.iconset
-# Result: icon.icns
+
+# Result: icon.icns — copy this into your project folder
 ```
 
-### Windows (.ico)
+#### macOS icon gotchas
 
-**Creating .ico from any image:**
+**The icon doesn't update after rebuilding**
 
-- **Free online:** https://www.favicon.io/favicon-converter/ — upload your PNG, download the `.ico`
-- **GIMP:** File → Export As → name it `icon.ico` → Save
-- **ImageMagick (command line):**
-  ```bash
-  magick convert your-image.png -resize 256x256 icon.ico
-  ```
+macOS caches app icons aggressively. After rebuilding, the old icon may still show in the Dock and Finder. To force a refresh:
 
-### Linux
+```bash
+# Clear the icon cache and restart the Dock
+sudo find /private/var/folders -name com.apple.dock.iconcache -delete
+killall Dock
+```
 
-Linux AppImages don't have an icon file built in the same way. The icon appears in the file manager based on the `.desktop` entry. `build.py` sets this automatically using the app name.
+Or just log out and back in — that clears it too.
+
+**The icon looks wrong in Finder but right in the Dock (or vice versa)**
+
+macOS pulls different sizes from the `.icns` for different contexts. If you used Method 1 (quick), some sizes may not be perfect. Use Method 2 to generate all sizes properly.
+
+**Transparent background vs white background**
+
+macOS icons with transparent backgrounds look correct. Icons with white backgrounds look like a white square in the Dock. Make sure your source PNG has a transparent background, not a white one. In Photoshop or GIMP, delete the background layer before saving.
+
+**"Icon not found" warning during build**
+
+```
+WARNING: Icon file 'icon.icns' not found
+```
+
+This means PyInstaller can't find your icon file. Check:
+1. Is `icon.icns` in the same folder as `build.py`? (not in a subfolder)
+2. Is the filename spelled correctly in the CONFIG — exactly matching the actual filename?
+3. Is the extension `.icns` (not `.ICNS` or `.icns.png`)?
+
+---
+
+### Windows icons (.ico)
+
+A `.ico` file is not a regular image — it's a container that holds your image at multiple sizes (16×16, 32×32, 48×48, 256×256) all in one file. Windows picks the right size depending on context (small for the taskbar, large for the desktop).
+
+#### Creating a .ico file
+
+**Option 1 — Free online (easiest):**
+
+1. Go to https://www.favicon.io/favicon-converter/
+2. Upload your PNG
+3. Download the `.ico` file
+4. Rename it to `icon.ico` and copy into your project folder
+
+**Option 2 — GIMP (free, installed locally):**
+
+1. Open your PNG in GIMP
+2. File → Export As
+3. Name the file `icon.ico`
+4. Click Export → Save
+5. In the ICO options dialog, make sure multiple sizes are selected
+
+**Option 3 — ImageMagick (command line):**
+
+```bash
+# Install ImageMagick first: https://imagemagick.org/
+# Then run:
+magick convert your-image.png -define icon:auto-resize=256,128,64,48,32,16 icon.ico
+```
+
+The `auto-resize` flag generates all sizes in one pass — this is the best .ico quality.
+
+#### Windows icon gotchas
+
+**The icon doesn't update after rebuilding**
+
+Windows caches icon thumbnails in a database called the Icon Cache. After rebuilding your app, the old icon may still show in File Explorer. To force a refresh:
+
+1. Open Task Manager (Ctrl+Shift+Esc)
+2. Find "Windows Explorer" in the list
+3. Right-click → Restart
+
+Or run this in Command Prompt:
+
+```cmd
+ie4uinit.exe -show
+```
+
+**The .exe shows a default Python icon instead of your custom one**
+
+Check:
+1. Is the file named exactly `icon.ico` (not `icon.ICO` or `Icon.ico`)?
+2. Is `ICON_WIN = "icon.ico"` set in the CONFIG?
+3. Is the file in the same folder as `build.py`?
+4. Did you clear the icon cache? (see above)
+
+**The icon looks pixelated / blurry**
+
+Your source image was too small. Use a PNG of at least 256×256 pixels. 512×512 is better.
+
+---
+
+### Linux icons
+
+Linux AppImages don't embed icons the same way macOS and Windows do. The icon is referenced via a `.desktop` entry file — a small text file that tells the desktop environment what the app is called, where the executable is, and what icon to show.
+
+`build.py` generates the `.desktop` file automatically. The icon shown in the file manager will be the default application icon unless you place a PNG named after your app in the AppDir.
+
+For most use cases this is fine. If you need a custom icon on Linux, place a `256×256 PNG` named `appname.png` (lowercase, matching your APP_NAME) in the same folder as `build.py`, and it will be included in the AppDir automatically.
+
+---
+
+### Summary — what file you need for each platform
+
+| What you have | What you need for macOS | What you need for Windows | What you need for Linux |
+|---------------|------------------------|--------------------------|------------------------|
+| PNG (any size) | Convert to `.icns` with `sips` | Convert to `.ico` with favicon.io | Rename to `appname.png`, 256×256 |
+| JPG | Convert to PNG first, then `.icns` | Convert to PNG first, then `.ico` | Convert to PNG first |
+| SVG | Export to PNG (512×512+), then `.icns` | Export to PNG, then `.ico` | Export to PNG (256×256) |
+| Existing `.icns` | ✓ Use directly | Convert to `.ico` separately | Extract PNG from it |
+| Existing `.ico` | Convert: `sips -s format icns icon.ico --out icon.icns` | ✓ Use directly | Extract PNG |
 
 ---
 
